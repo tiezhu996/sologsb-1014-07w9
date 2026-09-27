@@ -1,4 +1,4 @@
-export type StepType = 'premise' | 'derivation' | 'goal';
+export type StepType = 'premise' | 'derivation' | 'goal' | 'assumption' | 'discharge';
 export type CheckSeverity = 'error' | 'warning' | 'info';
 
 export interface ProofStep {
@@ -10,6 +10,12 @@ export interface ProofStep {
   note: string;
   counterexample: string;
   alternative: string;
+  /**
+   * 子证明配对标识：assumption（开始·临时假设）与 discharge（收尾）
+   * 拥有相同的 subId。中间步骤不带 subId，其所属子证明由步骤顺序与
+   * 配对标记按栈结构推出。旧稿没有该字段，一律按普通步骤处理。
+   */
+  subId?: string;
 }
 
 export interface ProofVersion {

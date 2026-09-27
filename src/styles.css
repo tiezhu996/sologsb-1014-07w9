@@ -137,6 +137,19 @@ button { font: inherit; }
 }
 .step-card:hover { border-color: #b9cad8; box-shadow: 0 8px 20px rgba(35,62,86,.08); }
 .step-card.is-selected { border-color: #5d96c3; box-shadow: 0 0 0 2px rgba(46,115,167,.11), 0 8px 22px rgba(35,62,86,.08); }
+.step-card.type-assumption { border-left: 3px solid #d99a23; background: linear-gradient(90deg, #fff8ea 0 6px, var(--panel) 6px); }
+.step-card.type-discharge { border-left: 3px solid #286ea8; background: linear-gradient(90deg, #edf5fb 0 6px, var(--panel) 6px); }
+.subproof-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 12px; border-radius: 8px;
+  font-size: 11px; font-weight: 600; letter-spacing: .02em;
+}
+.subproof-banner.is-start { color: #94630c; background: #fff3d6; border: 1px dashed #e0b85f; }
+.subproof-banner.is-end { color: #1f5b8c; background: #e9f3fa; border: 1px dashed #7fa9c9; }
+.subproof-marker { font-weight: 800; }
+.scope-chip { padding: 2px 6px; border-radius: 5px; color: #8a5a12; background: #fdf0d5; font-size: 10px; }
+.type-discharge .scope-chip { color: #1f5b8c; background: #e4f0f8; }
+.hint-copy { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .step-rail { padding: 12px 8px; display: flex; flex-direction: column; align-items: center; gap: 10px; background: #f5f8fb; border-right: 1px solid #e7edf2; }
 .drag-handle { color: #9ba8b7; cursor: grab; font-size: 17px; user-select: none; }
 .step-number { color: #627187; font: 700 11px Georgia, serif; }

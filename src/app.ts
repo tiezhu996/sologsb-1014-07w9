@@ -1,6 +1,6 @@
 import m, { type Component } from 'mithril';
 import katex from 'katex';
-import { compareVersion, ProofStore, RULES } from './store';
+import { analyzeScopes, compareVersion, ProofStore, RULES } from './store';
 import type { ProofDocument, ProofStep } from './types';
 
 const store = new ProofStore();
@@ -25,6 +25,8 @@ const typeLabel: Record<ProofStep['type'], string> = {
   premise: '前提',
   derivation: '推导',
   goal: '目标 / 结论',
+  assumption: '子证明开始 · 临时假设',
+  discharge: '子证明收尾',
 };
 
 function renderRichText(text: string): m.Children {
@@ -55,17 +57,31 @@ function download(name: string, content: string, mime: string): void {
 
 function exportMarkdown(document: ProofDocument): string {
   const lines = [`# ${document.title}`, '', `**证明目标：** $${document.goal}$`, ''];
+  const scopes = analyzeScopes(document.steps);
   document.steps.forEach((step, index) => {
     const refs = step.references.map((id) => `步骤 ${document.steps.findIndex((item) => item.id === id) + 1}`).filter((ref) => ref !== '步骤 0');
+    const scope = scopes[index];
+    if (step.type === 'assumption') {
+      lines.push(`> ### ▶ 子证明开始（步骤 ${index + 1}）`);
+      lines.push(`> **临时假设：** ${step.statement}`);
+      lines.push('>');
+    }
     lines.push(`## ${index + 1}. ${step.statement}`);
     lines.push('');
     lines.push(`- 类型：${typeLabel[step.type]}`);
     lines.push(`- 推理规则：${step.rule}`);
+    if (scope.stack.length) lines.push(`- 所属子证明：第 ${scope.stack.length} 层`);
     if (refs.length) lines.push(`- 依据：${refs.join('、')}`);
     if (step.note) lines.push(`- 旁注：${step.note}`);
     if (step.counterexample) lines.push(`- 反例：${step.counterexample}`);
     if (step.alternative) lines.push(`- 替代分支：${step.alternative}`);
     lines.push('');
+    if (scope.closes) {
+      const startIndex = document.steps.findIndex((item) => item.id === scope.closes) + 1;
+      lines.push(`> ### ◀ 子证明结束（假设始于步骤 ${startIndex}，收于步骤 ${index + 1}）`);
+      lines.push(`> **收回假设后的结论：** ${step.statement}`);
+      lines.push('');
+    }
   });
   lines.push('## 符号表');
   Object.entries(document.symbols).forEach(([symbol, meaning]) => lines.push(`- $${symbol}$：${meaning}`));
@@ -74,11 +90,21 @@ function exportMarkdown(document: ProofDocument): string {
 
 function exportLatex(document: ProofDocument): string {
   const lines = ['\\documentclass{article}', '\\usepackage{amsmath,amssymb}', '\\begin{document}', `\\section*{${document.title}}`, `\\textbf{证明目标：} $${document.goal}$`, '\\begin{enumerate}'];
-  document.steps.forEach((step) => {
+  const scopes = analyzeScopes(document.steps);
+  document.steps.forEach((step, index) => {
     const refs = step.references.map((id) => document.steps.findIndex((item) => item.id === id) + 1).filter(Boolean);
     const support = refs.length ? `（依据 ${refs.join(', ')}；${step.rule}）` : `（${step.rule}）`;
+    if (step.type === 'assumption') {
+      lines.push(`  % ▶ 子证明开始（步骤 ${index + 1}），临时假设：${step.statement.replace(/%/g, '\\%')}`);
+      lines.push('  \\fbox{\\textbf{临时假设}} \\emph{（以下步骤仅在本子证明内有效）}');
+    }
     lines.push(`  \\item ${step.statement} ${support}`);
     if (step.note) lines.push(`  \\par\\small 旁注：${step.note}`);
+    if (scopes[index].closes) {
+      const startIndex = document.steps.findIndex((item) => item.id === scopes[index].closes) + 1;
+      lines.push(`  % ◀ 子证明结束（假设始于步骤 ${startIndex}，收于步骤 ${index + 1}）`);
+      lines.push(`  \\hrulefill\\textbf{子证明收尾：收回始于步骤 ${startIndex} 的临时假设}`);
+    }
   });
   lines.push('\\end{enumerate}', '\\end{document}');
   return lines.join('\n');
@@ -147,6 +173,7 @@ export class ProofApp implements Component {
     const warnings = checks.filter((check) => check.severity === 'warning').length;
     const selectedVersion = document.versions.find((version) => version.id === store.compareVersionId);
     const diff = selectedVersion ? compareVersion(document, selectedVersion) : [];
+    const stepScopes = analyzeScopes(document.steps);
 
     return m('div.app-shell', [
       m('header.topbar', [
@@ -228,51 +255,73 @@ export class ProofApp implements Component {
             m('div.steps-toolbar-actions', [
               m('button.button.is-small.is-white', { onclick: () => { store.addStep('premise'); m.redraw(); } }, '＋ 前提'),
               m('button.button.is-small.is-white', { onclick: () => { store.addStep('derivation'); m.redraw(); } }, '＋ 推导'),
+              m('button.button.is-small.is-warning', { onclick: () => { store.addSubproof(); m.redraw(); } }, '＋ 子证明（假设 / 收尾）'),
               m('button.button.is-small.is-white', { onclick: () => { store.addStep('goal'); m.redraw(); } }, '＋ 结论'),
             ]),
           ]),
           m('div.steps-list', document.steps.length === 0 && m('div.empty-state', '尚无步骤。按 Ctrl+Enter 开始添加。'), document.steps.map((step, index) => {
             const stepChecks = checks.filter((check) => check.stepId === step.id);
-            return m('article.step-card', {
-              'data-step': step.id,
-              class: step.id === store.selectedStepId ? 'is-selected' : '',
-              draggable: true,
-              onclick: () => { store.selectStep(step.id); m.redraw(); },
-              ondragstart: () => { store.dragStepId = step.id; },
-              ondragover: (event: DragEvent) => event.preventDefault(),
-              ondrop: (event: DragEvent) => { event.preventDefault(); store.moveStep(store.dragStepId, step.id); store.dragStepId = ''; m.redraw(); },
-            }, [
-              m('div.step-rail', [
-                m('span.drag-handle', { title: '拖动排序' }, '⠿'),
-                m('span.step-number', String(index + 1).padStart(2, '0')),
+            const scope = stepScopes[index];
+            const depth = scope.context.length;
+            const tagClass = step.type === 'goal' ? 'is-success' : step.type === 'premise' ? 'is-info' : step.type === 'assumption' ? 'is-warning' : step.type === 'discharge' ? 'is-primary' : 'is-light';
+            const roleLabel = step.type === 'assumption'
+              ? `临时假设 · 子证明 ${scope.stack.length + 1} 开始`
+              : step.type === 'discharge'
+                ? `子证明收尾${scope.closes ? ` · 收回始于步骤 ${document.steps.findIndex((item) => item.id === scope.closes) + 1} 的假设` : ''}`
+                : '';
+            return [
+              step.type === 'assumption' && m('div.subproof-banner is-start', { style: { marginLeft: `${depth === 0 ? 0 : (depth - 1) * 22}px` } }, [
+                m('span.subproof-marker', '▶'),
+                `子证明开始 · 以下步骤仅在本子证明内有效（假设见步骤 ${index + 1}）`,
               ]),
-              m('div.step-body', [
-                m('div.step-head', [
-                  m('span.tag', { class: step.type === 'goal' ? 'is-success' : step.type === 'premise' ? 'is-info' : 'is-light' }, typeLabel[step.type]),
-                  m('span.rule-chip', step.rule),
-                  m('span.step-id', `#${shortId(step.id)}`),
-                  stepChecks.length > 0 && m('span.issue-badge', `${stepChecks.length} 项检查`),
-                  m('button.step-menu', { onclick: (event: Event) => { event.stopPropagation(); store.removeStep(step.id); m.redraw(); }, title: '删除步骤' }, '×'),
+              m('article.step-card', {
+                'data-step': step.id,
+                class: `${step.id === store.selectedStepId ? 'is-selected' : ''} type-${step.type}`,
+                style: { marginLeft: `${depth * 22}px` },
+                draggable: true,
+                onclick: () => { store.selectStep(step.id); m.redraw(); },
+                ondragstart: () => { store.dragStepId = step.id; },
+                ondragover: (event: DragEvent) => event.preventDefault(),
+                ondrop: (event: DragEvent) => { event.preventDefault(); store.moveStep(store.dragStepId, step.id); store.dragStepId = ''; m.redraw(); },
+              }, [
+                m('div.step-rail', [
+                  m('span.drag-handle', { title: '拖动排序' }, '⠿'),
+                  m('span.step-number', String(index + 1).padStart(2, '0')),
                 ]),
-                m('div.step-statement', renderRichText(step.statement)),
-                m('div.step-footer', [
-                  m('span', step.references.length ? `依据：${step.references.map((reference) => {
-                    const referenceIndex = document.steps.findIndex((item) => item.id === reference);
-                    return referenceIndex >= 0 ? `步骤 ${referenceIndex + 1}` : `缺失 ${shortId(reference)}`;
-                  }).join('、')}` : '独立前提'),
-                  step.note && m('span.has-note', '含旁注'),
-                  step.counterexample && m('span.has-counterexample', '含反例'),
-                  step.alternative && m('span.has-branch', '含替代分支'),
+                m('div.step-body', [
+                  m('div.step-head', [
+                    m('span.tag', { class: tagClass }, typeLabel[step.type]),
+                    m('span.rule-chip', step.rule),
+                    roleLabel && m('span.scope-chip', roleLabel),
+                    m('span.step-id', `#${shortId(step.id)}`),
+                    stepChecks.length > 0 && m('span.issue-badge', `${stepChecks.length} 项检查`),
+                    m('button.step-menu', { onclick: (event: Event) => { event.stopPropagation(); store.removeStep(step.id); m.redraw(); }, title: '删除步骤' }, '×'),
+                  ]),
+                  m('div.step-statement', renderRichText(step.statement)),
+                  m('div.step-footer', [
+                    m('span', step.references.length ? `依据：${step.references.map((reference) => {
+                      const referenceIndex = document.steps.findIndex((item) => item.id === reference);
+                      return referenceIndex >= 0 ? `步骤 ${referenceIndex + 1}` : `缺失 ${shortId(reference)}`;
+                    }).join('、')}` : '独立前提'),
+                    step.note && m('span.has-note', '含旁注'),
+                    step.counterexample && m('span.has-counterexample', '含反例'),
+                    step.alternative && m('span.has-branch', '含替代分支'),
+                  ]),
                 ]),
               ]),
-            ]);
+              step.type === 'discharge' && scope.closes && m('div.subproof-banner is-end', { style: { marginLeft: `${scope.stack.length * 22}px` } }, [
+                m('span.subproof-marker', '◀'),
+                `子证明结束 · 假设已收回，此后只能引用步骤 ${index + 1} 的收尾结论`,
+              ]),
+            ];
           })),
         ]),
         m('aside.right-rail', [
           selected ? m('section.panel.inspector', [
             m('div.panel-heading', [m('span', '步骤检查器'), m('span.inspector-step', `#${shortId(selected.id)}`)]),
             m('label.field-label', '步骤类型'),
-            m('div.select.is-fullwidth', m('select', { value: selected.type, onchange: (event: Event) => store.updateStep({ type: (event.target as HTMLSelectElement).value as ProofStep['type'] }) }, Object.entries(typeLabel).map(([value, label]) => m('option', { value }, label)))),
+            m('div.select.is-fullwidth', m('select', { value: selected.type, onchange: (event: Event) => { store.setStepType(selected.id, (event.target as HTMLSelectElement).value as ProofStep['type']); m.redraw(); } }, Object.entries(typeLabel).map(([value, label]) => m('option', { value }, label)))),
+            m('p.hint-copy', '“子证明开始”放入临时假设，并与一个“子证明收尾”配对；假设只在两者之间有效。'),
             m('label.field-label', '推理规则'),
             m('div.select.is-fullwidth', m('select', { value: selected.rule, onchange: (event: Event) => store.updateStep({ rule: (event.target as HTMLSelectElement).value }) }, RULES.map((rule) => m('option', { value: rule }, rule)))),
             m('label.field-label', '命题或推导式'),
@@ -301,19 +350,23 @@ export class ProofApp implements Component {
               },
             }, snippet.label))),
             m('label.field-label', '引用步骤'),
-            m('div.reference-list', document.steps.filter((step) => step.id !== selected.id).map((step) => m('label.reference-item', [
-              m('input', {
-                type: 'checkbox',
-                checked: selected.references.includes(step.id),
-                onchange: (event: Event) => {
-                  const checked = (event.target as HTMLInputElement).checked;
-                  const references = checked ? [...selected.references, step.id] : selected.references.filter((id) => id !== step.id);
-                  store.updateStep({ references });
-                },
-              }),
-              m('span', `步骤 ${document.steps.indexOf(step) + 1}`),
-              m('small', step.statement.replace(/\$/g, '')),
-            ]))),
+            m('p.hint-copy', '子证明外只能勾选该子证明的“收尾”步；勾选假设或内部步骤会报依赖越界。'),
+            m('div.reference-list', document.steps.filter((step) => step.id !== selected.id).map((step) => {
+              const role = step.type === 'assumption' ? '〔假设〕' : step.type === 'discharge' ? '〔收尾〕' : '';
+              return m('label.reference-item', [
+                m('input', {
+                  type: 'checkbox',
+                  checked: selected.references.includes(step.id),
+                  onchange: (event: Event) => {
+                    const checked = (event.target as HTMLInputElement).checked;
+                    const references = checked ? [...selected.references, step.id] : selected.references.filter((id) => id !== step.id);
+                    store.updateStep({ references });
+                  },
+                }),
+                m('span', `步骤 ${document.steps.indexOf(step) + 1} ${role}`),
+                m('small', step.statement.replace(/\$/g, '')),
+              ]);
+            })),
             m('div.field-grid', [
               m('div', [m('label.field-label', '旁注'), m('textarea.textarea.is-small', { rows: 2, value: selected.note, placeholder: '记录思路或条件', oninput: (event: Event) => store.updateStep({ note: (event.target as HTMLTextAreaElement).value }) })]),
               m('div', [m('label.field-label', '反例 / 边界情况'), m('textarea.textarea.is-small', { rows: 2, value: selected.counterexample, placeholder: '尝试寻找反例', oninput: (event: Event) => store.updateStep({ counterexample: (event.target as HTMLTextAreaElement).value }) })]),
