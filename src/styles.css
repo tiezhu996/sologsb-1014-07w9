@@ -137,6 +137,18 @@ button { font: inherit; }
 }
 .step-card:hover { border-color: #b9cad8; box-shadow: 0 8px 20px rgba(35,62,86,.08); }
 .step-card.is-selected { border-color: #5d96c3; box-shadow: 0 0 0 2px rgba(46,115,167,.11), 0 8px 22px rgba(35,62,86,.08); }
+.step-card.in-subproof { border-left: 3px solid #8b7bd8; }
+.step-card.sub-assume { border-left: 3px solid #d97706; background: #fffdf7; }
+.step-card.sub-close { border-left: 3px solid #2f9e6e; background: #f7fcfa; }
+.subproof-chip { padding: 2px 6px; border-radius: 5px; font-size: 10px; }
+.subproof-chip.is-assume { color: #8a5410; background: #fdeecd; }
+.subproof-chip.is-close { color: #20624a; background: #dcf2e7; }
+.subproof-chip.is-inside { color: #5a4fb0; background: #ece9fb; }
+.subproof-box { padding: 9px 10px; border: 1px dashed #c9c2ee; border-radius: 9px; background: #f7f6fd; display: grid; gap: 7px; }
+.subproof-box p { margin: 0; font-size: 10px; color: #5b5470; line-height: 1.55; }
+.subproof-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.subproof-actions .button { margin: 0; }
+.scope-tag { padding: 1px 5px; border-radius: 4px; color: #8f2532; background: #ffe3e8; font-size: 9px; white-space: nowrap; }
 .step-rail { padding: 12px 8px; display: flex; flex-direction: column; align-items: center; gap: 10px; background: #f5f8fb; border-right: 1px solid #e7edf2; }
 .drag-handle { color: #9ba8b7; cursor: grab; font-size: 17px; user-select: none; }
 .step-number { color: #627187; font: 700 11px Georgia, serif; }
@@ -164,7 +176,7 @@ button { font: inherit; }
 .formula-key { min-width: 30px; height: 27px; padding: 0 7px; border: 1px solid #d9e0e7; border-radius: 6px; color: #365571; background: #f8fafc; cursor: pointer; }
 .formula-key:hover { border-color: #7ba7c8; color: #17527f; background: #edf5fa; }
 .reference-list { display: grid; gap: 4px; max-height: 140px; overflow: auto; }
-.reference-item { display: grid; grid-template-columns: 16px 58px 1fr; align-items: center; gap: 3px; padding: 4px 5px; border-radius: 6px; background: #f7f9fb; font-size: 10px; }
+.reference-item { display: grid; grid-template-columns: 16px 58px 1fr auto; align-items: center; gap: 3px; padding: 4px 5px; border-radius: 6px; background: #f7f9fb; font-size: 10px; }
 .reference-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .field-grid { display: grid; gap: 2px; }
 .add-symbol { margin-top: 12px !important; }

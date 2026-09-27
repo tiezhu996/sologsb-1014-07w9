@@ -1,6 +1,6 @@
 import m, { type Component } from 'mithril';
 import katex from 'katex';
-import { compareVersion, ProofStore, RULES } from './store';
+import { analyzeSubproofs, compareVersion, ProofStore, RULES, SUBPROOF_METHODS } from './store';
 import type { ProofDocument, ProofStep } from './types';
 
 const store = new ProofStore();
@@ -53,18 +53,26 @@ function download(name: string, content: string, mime: string): void {
   URL.revokeObjectURL(link.href);
 }
 
-function exportMarkdown(document: ProofDocument): string {
+export function exportMarkdown(document: ProofDocument): string {
+  const subproofs = analyzeSubproofs(document);
   const lines = [`# ${document.title}`, '', `**证明目标：** $${document.goal}$`, ''];
   document.steps.forEach((step, index) => {
+    const depth = subproofs.depth.get(step.id) ?? 0;
+    const prefix = '> '.repeat(depth);
+    const blank = depth > 0 ? '>' : '';
     const refs = step.references.map((id) => `步骤 ${document.steps.findIndex((item) => item.id === id) + 1}`).filter((ref) => ref !== '步骤 0');
-    lines.push(`## ${index + 1}. ${step.statement}`);
-    lines.push('');
-    lines.push(`- 类型：${typeLabel[step.type]}`);
-    lines.push(`- 推理规则：${step.rule}`);
-    if (refs.length) lines.push(`- 依据：${refs.join('、')}`);
-    if (step.note) lines.push(`- 旁注：${step.note}`);
-    if (step.counterexample) lines.push(`- 反例：${step.counterexample}`);
-    if (step.alternative) lines.push(`- 替代分支：${step.alternative}`);
+    const assumeInfo = step.subproofRole === 'assume' ? subproofs.subproofs.find((info) => info.assumeStepId === step.id) : undefined;
+    const closeInfo = step.subproofRole === 'close' ? subproofs.subproofs.find((info) => info.closeStepId === step.id) : undefined;
+    lines.push(`${prefix}## ${index + 1}. ${step.statement}`);
+    lines.push(blank);
+    if (assumeInfo) lines.push(`${prefix}- **子证明 ${assumeInfo.label} · 开始（${assumeInfo.method}）**：假设内容 ${step.statement}`);
+    if (closeInfo) lines.push(`${prefix}- **子证明 ${closeInfo.label} · 收尾**：临时假设（步骤 ${closeInfo.startIndex + 1}）已收回，本步骤起可在子证明外引用`);
+    lines.push(`${prefix}- 类型：${typeLabel[step.type]}`);
+    lines.push(`${prefix}- 推理规则：${step.rule}`);
+    if (refs.length) lines.push(`${prefix}- 依据：${refs.join('、')}`);
+    if (step.note) lines.push(`${prefix}- 旁注：${step.note}`);
+    if (step.counterexample) lines.push(`${prefix}- 反例：${step.counterexample}`);
+    if (step.alternative) lines.push(`${prefix}- 替代分支：${step.alternative}`);
     lines.push('');
   });
   lines.push('## 符号表');
@@ -72,12 +80,22 @@ function exportMarkdown(document: ProofDocument): string {
   return lines.join('\n');
 }
 
-function exportLatex(document: ProofDocument): string {
+export function exportLatex(document: ProofDocument): string {
+  const subproofs = analyzeSubproofs(document);
   const lines = ['\\documentclass{article}', '\\usepackage{amsmath,amssymb}', '\\begin{document}', `\\section*{${document.title}}`, `\\textbf{证明目标：} $${document.goal}$`, '\\begin{enumerate}'];
   document.steps.forEach((step) => {
+    const depth = subproofs.depth.get(step.id) ?? 0;
     const refs = step.references.map((id) => document.steps.findIndex((item) => item.id === id) + 1).filter(Boolean);
     const support = refs.length ? `（依据 ${refs.join(', ')}；${step.rule}）` : `（${step.rule}）`;
-    lines.push(`  \\item ${step.statement} ${support}`);
+    const indent = depth > 0 ? `\\hspace*{${(depth * 1.5).toFixed(1)}em}` : '';
+    const assumeInfo = step.subproofRole === 'assume' ? subproofs.subproofs.find((info) => info.assumeStepId === step.id) : undefined;
+    const closeInfo = step.subproofRole === 'close' ? subproofs.subproofs.find((info) => info.closeStepId === step.id) : undefined;
+    const marker = assumeInfo
+      ? `\\textbf{[子证明 ${assumeInfo.label} · 开始（${assumeInfo.method}）]} `
+      : closeInfo
+        ? `\\textbf{[子证明 ${closeInfo.label} · 收尾，假设已收回]} `
+        : '';
+    lines.push(`  \\item ${indent}${marker}${step.statement} ${support}`);
     if (step.note) lines.push(`  \\par\\small 旁注：${step.note}`);
   });
   lines.push('\\end{enumerate}', '\\end{document}');
@@ -143,6 +161,7 @@ export class ProofApp implements Component {
     const document = store.current;
     const selected = store.selectedStep;
     const checks = store.checks;
+    const subproofs = analyzeSubproofs(document);
     const errors = checks.filter((check) => check.severity === 'error').length;
     const warnings = checks.filter((check) => check.severity === 'warning').length;
     const selectedVersion = document.versions.find((version) => version.id === store.compareVersionId);
@@ -233,9 +252,19 @@ export class ProofApp implements Component {
           ]),
           m('div.steps-list', document.steps.length === 0 && m('div.empty-state', '尚无步骤。按 Ctrl+Enter 开始添加。'), document.steps.map((step, index) => {
             const stepChecks = checks.filter((check) => check.stepId === step.id);
+            const depth = subproofs.depth.get(step.id) ?? 0;
+            const assumeInfo = step.subproofRole === 'assume' ? subproofs.subproofs.find((info) => info.assumeStepId === step.id) : undefined;
+            const closeInfo = step.subproofRole === 'close' ? subproofs.subproofs.find((info) => info.closeStepId === step.id) : undefined;
+            const enclosing = subproofs.byStep.get(step.id) ?? [];
+            const innermost = enclosing[enclosing.length - 1];
+            const cardClass = [
+              step.id === store.selectedStepId ? 'is-selected' : '',
+              assumeInfo ? 'sub-assume' : closeInfo ? 'sub-close' : depth > 0 ? 'in-subproof' : '',
+            ].filter(Boolean).join(' ');
             return m('article.step-card', {
               'data-step': step.id,
-              class: step.id === store.selectedStepId ? 'is-selected' : '',
+              class: cardClass,
+              style: depth > 1 ? `margin-left: ${(depth - 1) * 22}px` : '',
               draggable: true,
               onclick: () => { store.selectStep(step.id); m.redraw(); },
               ondragstart: () => { store.dragStepId = step.id; },
@@ -250,6 +279,9 @@ export class ProofApp implements Component {
                 m('div.step-head', [
                   m('span.tag', { class: step.type === 'goal' ? 'is-success' : step.type === 'premise' ? 'is-info' : 'is-light' }, typeLabel[step.type]),
                   m('span.rule-chip', step.rule),
+                  assumeInfo && m('span.subproof-chip.is-assume', `子证明 ${assumeInfo.label} · 假设`),
+                  closeInfo && m('span.subproof-chip.is-close', `子证明 ${closeInfo.label} · 收尾`),
+                  !assumeInfo && !closeInfo && innermost && m('span.subproof-chip.is-inside', `子证明 ${innermost.label} 内`),
                   m('span.step-id', `#${shortId(step.id)}`),
                   stepChecks.length > 0 && m('span.issue-badge', `${stepChecks.length} 项检查`),
                   m('button.step-menu', { onclick: (event: Event) => { event.stopPropagation(); store.removeStep(step.id); m.redraw(); }, title: '删除步骤' }, '×'),
@@ -300,20 +332,57 @@ export class ProofApp implements Component {
                 m.redraw();
               },
             }, snippet.label))),
+            m('label.field-label', '子证明'),
+            m('div.subproof-box', (() => {
+              const selectedAssume = selected.subproofRole === 'assume' ? subproofs.subproofs.find((info) => info.assumeStepId === selected.id) : undefined;
+              const selectedClose = selected.subproofRole === 'close' ? subproofs.subproofs.find((info) => info.closeStepId === selected.id) : undefined;
+              const selectedEnclosing = subproofs.byStep.get(selected.id) ?? [];
+              const openInnermost = [...selectedEnclosing].reverse().find((info) => info.closeStepId === null);
+              if (selectedAssume) {
+                return [
+                  m('p', `本步骤是子证明 ${selectedAssume.label} 的临时假设（${selectedAssume.method}），只在子证明内有效，外部只能引用收尾步骤。`),
+                  m('div.subproof-actions', [
+                    selectedAssume.closeStepId === null && m('button.button.is-small.is-link', { onclick: () => { store.closeSubproof(); m.redraw(); } }, `✓ 收尾子证明 ${selectedAssume.label}`),
+                    m('button.button.is-small', { onclick: () => { store.unmarkSubproof(selectedAssume.id); m.redraw(); } }, '取消子证明标记'),
+                  ]),
+                ];
+              }
+              if (selectedClose) {
+                return [
+                  m('p', `本步骤是子证明 ${selectedClose.label} 的收尾，须不再直接引用假设；子证明外只能引用本步骤。`),
+                  m('div.subproof-actions', m('button.button.is-small', { onclick: () => { store.unmarkSubproof(selectedClose.id); m.redraw(); } }, '取消子证明标记')),
+                ];
+              }
+              return [
+                selectedEnclosing.length
+                  ? m('p', `本步骤位于子证明 ${selectedEnclosing.map((info) => info.label).join('、')} 内，可引用其中的假设与中间步骤。`)
+                  : m('p', '反证法与数学归纳需要先临时假设一条命题。开启子证明后，假设只在子证明内有效，收尾后外部只能引用收尾步骤。'),
+                m('div.subproof-actions', [
+                  openInnermost && m('button.button.is-small.is-link', { onclick: () => { store.closeSubproof(); m.redraw(); } }, `✓ 收尾子证明 ${openInnermost.label}`),
+                  ...SUBPROOF_METHODS.map((method) => m('button.button.is-small', { onclick: () => { store.startSubproof(method); m.redraw(); } }, `＋ ${method}假设`)),
+                ]),
+              ];
+            })()),
             m('label.field-label', '引用步骤'),
-            m('div.reference-list', document.steps.filter((step) => step.id !== selected.id).map((step) => m('label.reference-item', [
-              m('input', {
-                type: 'checkbox',
-                checked: selected.references.includes(step.id),
-                onchange: (event: Event) => {
-                  const checked = (event.target as HTMLInputElement).checked;
-                  const references = checked ? [...selected.references, step.id] : selected.references.filter((id) => id !== step.id);
-                  store.updateStep({ references });
-                },
-              }),
-              m('span', `步骤 ${document.steps.indexOf(step) + 1}`),
-              m('small', step.statement.replace(/\$/g, '')),
-            ]))),
+            m('div.reference-list', document.steps.filter((step) => step.id !== selected.id).map((step) => {
+              const candidateSubproofs = subproofs.byStep.get(step.id) ?? [];
+              const selectedSubproofs = subproofs.byStep.get(selected.id) ?? [];
+              const outOfScope = candidateSubproofs.some((info) => !selectedSubproofs.includes(info) && step.id !== info.closeStepId);
+              return m('label.reference-item', [
+                m('input', {
+                  type: 'checkbox',
+                  checked: selected.references.includes(step.id),
+                  onchange: (event: Event) => {
+                    const checked = (event.target as HTMLInputElement).checked;
+                    const references = checked ? [...selected.references, step.id] : selected.references.filter((id) => id !== step.id);
+                    store.updateStep({ references });
+                  },
+                }),
+                m('span', `步骤 ${document.steps.indexOf(step) + 1}`),
+                m('small', step.statement.replace(/\$/g, '')),
+                outOfScope && m('span.scope-tag', '作用域外'),
+              ]);
+            })),
             m('div.field-grid', [
               m('div', [m('label.field-label', '旁注'), m('textarea.textarea.is-small', { rows: 2, value: selected.note, placeholder: '记录思路或条件', oninput: (event: Event) => store.updateStep({ note: (event.target as HTMLTextAreaElement).value }) })]),
               m('div', [m('label.field-label', '反例 / 边界情况'), m('textarea.textarea.is-small', { rows: 2, value: selected.counterexample, placeholder: '尝试寻找反例', oninput: (event: Event) => store.updateStep({ counterexample: (event.target as HTMLTextAreaElement).value }) })]),
